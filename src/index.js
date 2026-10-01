@@ -7,9 +7,25 @@ const URL = process.env.NESTEX_URL || 'https://trade.nestex.one/faucets';
 const interval = Number(process.env.INTERVAL_MINUTES || 60) * 60 * 1000;
 const headless = String(process.env.HEADLESS || 'false').toLowerCase() === 'true';
 const timeout = Number(process.env.CLAIM_TIMEOUT_MS || 15000);
+const storagePath = process.env.STORAGE_STATE_PATH || 'data/storageState.json';
 
-if (!fs.existsSync('data/storageState.json')) {
-  console.error('Sessão não encontrada. Rode: npm run login');
+// Allows the first authenticated session to be supplied securely as an environment secret.
+// The value must be the base64 encoding of the Playwright storageState.json file.
+if (process.env.STORAGE_STATE_B64 && !fs.existsSync(storagePath)) {
+  try {
+    fs.mkdirSync('data', { recursive: true });
+    const decoded = Buffer.from(process.env.STORAGE_STATE_B64, 'base64').toString('utf8');
+    JSON.parse(decoded);
+    fs.writeFileSync(storagePath, decoded, { mode: 0o600 });
+    console.log('Sessão inicial carregada a partir de STORAGE_STATE_B64.');
+  } catch (e) {
+    console.error('STORAGE_STATE_B64 inválido:', e.message);
+    process.exit(1);
+  }
+}
+
+if (!fs.existsSync(storagePath)) {
+  console.error('Sessão não encontrada. Configure STORAGE_STATE_B64 ou forneça data/storageState.json.');
   process.exit(1);
 }
 
@@ -17,11 +33,13 @@ let running = false;
 async function runOnce(){
   if (running) return;
   running = true;
-  const browser = await chromium.launch({headless});
-  const context = await browser.newContext({storageState:'data/storageState.json'});
-  const page = await context.newPage();
-  page.setDefaultTimeout(timeout);
+  let browser;
   try {
+    browser = await chromium.launch({headless});
+    const context = await browser.newContext({storageState:storagePath});
+    const page = await context.newPage();
+    page.setDefaultTimeout(timeout);
+
     await page.goto(URL,{waitUntil:'domcontentloaded'});
     await page.waitForTimeout(3000);
 
@@ -59,12 +77,12 @@ async function runOnce(){
       }
     }
     console.log(new Date().toISOString(), 'claims acionados:', found);
-    await context.storageState({path:'data/storageState.json'});
+    await context.storageState({path:storagePath});
   } catch(e){
-    logClaim(null,'run_error',e.message,page.url());
+    logClaim(null,'run_error',e.message,browser ? 'browser-started' : URL);
     console.error(e);
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
     running = false;
   }
 }
